@@ -35,94 +35,101 @@ CREATE TABLE transaction_hw3 (
 );
 
 --1
-select  job_industry_category, count(*) as number_of_customers
-from customer_hw3 cust 
-group by job_industry_category 
-order by number_of_customers desc;
+SELECT job_industry_category, COUNT(*) AS client_count
+FROM customer_hw3 cust
+GROUP BY job_industry_category
+ORDER BY client_count DESC;
 
 --2
-select to_char(date_trunc('month', trans.transaction_date::date), 'YYYY-MM') as transaction_month
-,cust.job_industry_category
-,sum(trans.list_price) as transaction_sum
-from transaction_hw3 trans
-inner join customer_hw3 cust
-on trans.customer_id = cust.customer_id 
-group by cust.job_industry_category , transaction_month
-order by transaction_month, cust.job_industry_category;
+SELECT to_char(date_trunc('month', trans.transaction_date::date), 'YYYY-MM') AS month,
+       cust.job_industry_category,
+       SUM(trans.list_price) AS total_transaction_amount
+FROM transaction_hw3 trans
+JOIN customer_hw3 cust ON trans.customer_id = cust.customer_id
+GROUP BY month, cust.job_industry_category
+ORDER BY month, total_transaction_amount;
 
 --3
-select trans.brand , count(*)
-from transaction_hw3 trans
-inner join customer_hw3 cust
-on trans.customer_id = cust.customer_id
-where cust.job_industry_category = 'IT' 
-  and trans.online_order = 'True' 
-  and trans.order_status = 'Approved'
-group by trans.brand 
-order by trans.brand desc;
+SELECT brand, COUNT(*) AS online_orders_count
+FROM transaction_hw3 trans
+WHERE trans.order_status = 'Approved'
+  AND trans.online_order = 'True'
+  AND trans.customer_id IN (
+    SELECT customer_id 
+    FROM customer_hw3 cust 
+    WHERE job_industry_category = 'IT')
+GROUP BY brand
+ORDER BY brand DESC;
 
 --4.1
-select customer_id
-  ,sum(list_price) as sum_of_transactions
-  ,max(list_price) as max_of_transactions
-  ,min(list_price) as min_of_transactions
-  ,count(transaction_id) as number_of_transactions
-from transaction_hw3 trans
-group by customer_id
-order by sum_of_transactions desc, number_of_transactions desc;
+SELECT trans.customer_id,
+       SUM(trans.list_price) AS total_transaction_amount,
+       MAX(trans.list_price) AS max_transaction_amount,
+       MIN(trans.list_price) AS min_transaction_amount,
+       COUNT(*) AS transaction_count
+FROM transaction_hw3 trans
+GROUP BY trans.customer_id
+ORDER BY total_transaction_amount DESC, transaction_count DESC;
 
 --4.2
-select distinct customer_id
-  ,sum(list_price) over(partition by customer_id) as sum_of_transactions
-  ,max(list_price) over(partition by customer_id) as max_of_transactions
-  ,min(list_price) over(partition by customer_id) as min_of_transactions
-  ,count(transaction_id) over(partition by customer_id) as number_of_transactions
-from transaction_hw3 trans
-order by sum_of_transactions desc, number_of_transactions desc;
+SELECT DISTINCT
+       customer_id,
+       SUM(list_price) OVER (PARTITION BY customer_id) AS total_transaction_amount,
+       MAX(list_price) OVER (PARTITION BY customer_id) AS max_transaction_amount,
+       MIN(list_price) OVER (PARTITION BY customer_id) AS min_transaction_amount,
+       COUNT(*) OVER (PARTITION BY customer_id) AS transaction_count
+FROM transaction_hw3 trans
+ORDER BY total_transaction_amount DESC, transaction_count DESC;
 
 --5.1
-with grouped_table as
-(select cust.customer_id, cust.first_name , cust.last_name , sum(trans.list_price) as sum_of_transactions
-from transaction_hw3 trans 
-inner join customer_hw3 cust
-on trans.customer_id = cust.customer_id 
-group by cust.customer_id, cust.first_name , cust.last_name)
-select *
-from grouped_table
-where sum_of_transactions = (select min(sum_of_transactions) from grouped_table);
-
+-- Создаем временную таблицу для хранения сумм транзакций по каждому клиенту
+CREATE TEMPORARY TABLE transaction_totals AS
+SELECT customer_id, SUM(list_price) AS total_transaction_amount
+FROM transaction_hw3 trans
+GROUP BY customer_id;
+-- Находим клиента с минимальной суммой транзакций
+SELECT cust.customer_id,
+       cust.first_name, 
+       cust.last_name, 
+       tratns_total.total_transaction_amount
+FROM customer_hw3 cust
+JOIN transaction_totals tratns_total ON cust.customer_id = tratns_total.customer_id
+WHERE tratns_total.total_transaction_amount = (SELECT MIN(total_transaction_amount) FROM transaction_totals);
 --5.2
-with grouped_table as
-(select cust.customer_id, cust.first_name , cust.last_name , sum(trans.list_price) as sum_of_transactions
-from transaction_hw3 trans
-inner join customer_hw3 cust
-on trans.customer_id = cust.customer_id 
-group by cust.customer_id, cust.first_name , cust.last_name)
-select *
-from grouped_table
-where sum_of_transactions = (select max(sum_of_transactions) from grouped_table);
+-- Находим клиента с максимальной суммой транзакций
+SELECT cust.customer_id,
+       cust.first_name, 
+       cust.last_name, 
+       tratns_total.total_transaction_amount
+FROM customer_hw3 cust
+JOIN transaction_totals tratns_total ON cust.customer_id = tratns_total.customer_id
+WHERE tratns_total.total_transaction_amount = (SELECT MAX(total_transaction_amount) FROM transaction_totals);
+-- Очищаем временную таблицу
+DROP TABLE transaction_totals;
 
 --6
-select customer_id, transaction_date, transaction_id
-from (select transaction_id, transaction_date, customer_id,
-      RANK() over(partition by customer_id order by transaction_date) as rank
-      from transaction_hw3 trans)
-where rank=1;
+SELECT customer_id, transaction_id, transaction_date
+FROM (
+    SELECT transaction_id, customer_id, transaction_date,
+           ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY transaction_date) AS rn
+    FROM transaction_hw3 trans)
+WHERE rn = 1;
 
 --7
-with grouped_table as 
-  (with window_table as
-    (select  cust.customer_id, cust.first_name, cust.last_name, cust.job_title
-	   ,trans.transaction_date::date as first_transaction_date
-	   ,lead(trans.transaction_date::date) over(partition by cust.first_name, cust.last_name order by trans.transaction_date::date) as second_transaction_date
-    from transaction_hw3 trans 
-    inner join customer_hw3 cust
-    on trans.customer_id = cust.customer_id)
-select *, max(second_transaction_date - first_transaction_date) as transaction_time_delta
-from window_table
-where second_transaction_date - first_transaction_date notnull
-group by customer_id, first_name, last_name, job_title, first_transaction_date, second_transaction_date
-order by transaction_time_delta desc)
-select *
-from grouped_table
-where transaction_time_delta = (select max(transaction_time_delta) from grouped_table);
+CREATE TEMPORARY TABLE table_1 AS
+  (WITH table_2 AS
+    (SELECT  cust.customer_id, cust.first_name, cust.last_name, cust.job_title
+	   ,trans.transaction_date::date AS first_transaction_date
+	   ,LEAD(trans.transaction_date::date) OVER(PARTITION BY cust.first_name, cust.last_name ORDER BY trans.transaction_date::date) AS second_transaction_date
+    FROM transaction_hw3 trans 
+    INNER JOIN customer_hw3 cust
+    ON trans.customer_id = cust.customer_id)
+  SELECT *, MAX(second_transaction_date - first_transaction_date) AS transaction_time_delta
+  FROM table_2
+  WHERE second_transaction_date - first_transaction_date NOTNULL
+  GROUP BY customer_id, first_name, last_name, job_title, first_transaction_date, second_transaction_date
+  ORDER BY transaction_time_delta DESC)
+SELECT *
+FROM table_1
+WHERE transaction_time_delta = (SELECT MAX(transaction_time_delta) FROM table_1);
+DROP TABLE table_1;
